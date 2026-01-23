@@ -1,0 +1,15 @@
+DEADJOE
+*~
+__pycache__
+dbentries.json
+entries.json
+screens.json
+run.sh
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.coverage
+.venv/
+.env
+/.vscode/
