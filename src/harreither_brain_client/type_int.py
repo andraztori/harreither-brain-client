@@ -1,0 +1,64 @@
+from enum import IntEnum
+
+
+class TypeInt(IntEnum):
+    NACK_INFO_UNKNOWN_DEVICE = -100
+    NACK_INFO_DEVICE_NOT_DIMMABLE = -99
+    NACK_INFO_INVALID_ACTION = -98
+    IDLE = -1
+    NACK = 0
+    ACK = 1
+    HEARTBEAT = 2
+    WAIT4ACK = 3
+    CONNECTION_START = 10
+    CONNECTION_CONFIRM = 11
+    CONNECTION_ESTABLISHED = 12
+    CONNECTION_DECLINED = 13
+    SC_INIT = 14
+    SC_PUBKEY = 15
+    SC_SECRET = 16
+    SC_ESTABLISHED = 17
+    SC_INVALID = 18
+    AUTH_LOGIN = 30
+    AUTH_LOGIN_DENIED = 31
+    AUTH_LOGIN_SUCCESS = 32
+    AUTH_APPLY_TOKEN = 33
+    AUTH_APPLY_TOKEN_RESPONSE = 34
+    AUTH_VERIFY_TOKEN = 35
+    AUTH_VERIFY_TOKEN_RESPONSE = 36
+    AUTH_RENEW_TOKEN = 37
+    AUTH_RENEW_TOKEN_RESPONSE = 38
+    AUTH_KILL_TOKEN = 39
+    TEST_ON = 100
+    TEST_OFF = 101
+    TEST_CRYPTO = 102
+    TEST_ALERT = 104
+    TEST_DEVICE_STATE = 105
+    TEST_SEND_FROM_APP = 107
+    INITIAL_DATA = -100
+    HOME_DATA = -101
+    ACTUAL_SCREEN = 200
+    ACTION_SELECTED = 201
+    ACTION_EDITED_VALUE = 202
+    ACTION_REQUEST_UI = 203
+    INIT_SWUPDATE = 247
+    DATA_SWUPDATE = 248
+    START_SWUPDATE = 249
+    SET_TIME = 250
+
+    TEST_SEND_FROM_BRAIN = 106
+    APP_INFO = 295
+    ADD_SCREEN = 296
+    ADD_DBENTRIES = 297
+    ADD_ITEMS = 299
+    UPDATE_ITEMS = 300
+    SET_HOME_DATA = 301
+    SET_ALERTS = 302
+
+    @classmethod
+    def get_name(cls, id_val):
+        """Translate an integer ID to its symbolic name."""
+        try:
+            return cls(id_val).name
+        except ValueError:
+            return f"UNKNOWN_TYPE_{id_val}"
