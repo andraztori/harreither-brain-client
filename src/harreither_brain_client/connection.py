@@ -5,7 +5,6 @@ import logging
 from contextlib import suppress
 
 import websockets
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 from .authenticate import Authenticate
 from .data import Data
@@ -20,6 +19,7 @@ MINIMUM_MC = 20000  # minimum message count number
 MAXIMUM_MC = 32000  # maximum message count number
 HEADERS = {}
 
+
 class Connection:
     def __init__(self, *, strict_mode: bool = False) -> None:
         self.ws = None
@@ -27,9 +27,6 @@ class Connection:
         self.device_id = None
         self.device_version = None
         self.connection_id = None
-        self.public_key: rsa.RSAPublicKey | None = None
-        self.session_key = None
-        self.session_iv = None
         self.device_signature = None
         self.token = None
         self.device_home_id = None
@@ -69,7 +66,7 @@ class Connection:
         buffer = b""
         while b"\x04" not in buffer:
             try:
-                chunk = await self.ws.recv()
+                chunk = await self.ws.recv()  # type: ignore
             except (
                 websockets.exceptions.ConnectionClosed,
                 websockets.exceptions.ConnectionClosedOK,
@@ -135,7 +132,9 @@ class Connection:
                     await self.send_keepalive()
                     last_keepalive = current_time
 
-                time_until_keepalive = KEEPALIVE_INTERVAL - (current_time - last_keepalive)
+                time_until_keepalive = KEEPALIVE_INTERVAL - (
+                    current_time - last_keepalive
+                )
                 timeout = max(0.1, time_until_keepalive)
 
                 socket_task = asyncio.create_task(self.receive_message())
@@ -203,7 +202,10 @@ class Connection:
     async def async_dispatch_message(self, msg: MessageReceived) -> None:
         if msg.type_int == TypeInt.ACK:
             await self.recv_ACK(msg)
-        if msg.type_int == TypeInt.SET_HOME_DATA:
+        elif msg.type_int == TypeInt.WAIT4ACK:
+            # Device sends WAIT4ACK if it cannot answer the request within 3 seconds
+            logger.debug("Received WAIT4ACK, device is processing request")
+        elif msg.type_int == TypeInt.SET_HOME_DATA:
             await self.data.recv_SET_HOME_DATA(msg)
         elif msg.type_int == TypeInt.APP_INFO:
             await self.data.recv_APP_INFO(msg)
@@ -221,6 +223,7 @@ class Connection:
             await self.data.recv_ADD_ITEMS(msg)
         elif msg.type_int == TypeInt.SET_ALERTS:
             await self.data.recv_SET_ALERTS(msg)
+            # there is no formal "initialization complete" message, but when alerts come, everything else seem to be already setup
             if not self.event_initial_setup_complete.is_set():
                 self.event_initial_setup_complete.set()
         elif msg.type_int == TypeInt.UPDATE_ITEMS:
@@ -230,6 +233,7 @@ class Connection:
 
     async def recv_ACK(self, msg: MessageReceived) -> None:
         ref = msg.ref
+        logger.info("ACK received for ref: %s", ref)
         logger.debug("Received ACK for ref: %s", ref)
 
     async def send_message(self, msg: MessageSend) -> None:

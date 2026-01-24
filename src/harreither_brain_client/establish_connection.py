@@ -5,7 +5,7 @@ from secrets import token_bytes
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .type_int import TypeInt
@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 class EstablishConnection:  # noqa: D101
     def __init__(self, connection) -> None:
         self.connection = connection
+        self.public_key: rsa.RSAPublicKey | None = None
+        self.session_key: bytes | None = None
+        self.session_iv: bytes | None = None
 
     async def recv_unencrypted(self, label):
         msg_bytes = await self.connection.receive_raw_message()
@@ -93,28 +96,29 @@ class EstablishConnection:  # noqa: D101
         logger.info(f"Public key [15]: {public_key}")
         logger.info(f"Device signature [15]: {device_signature}")
 
-        self.connection.public_key = serialization.load_pem_public_key(
+        self.public_key = serialization.load_pem_public_key(
             public_key.encode("utf-8"), backend=default_backend()
         )
 
         self.connection.device_signature = device_signature
 
-        self.connection.session_key = token_bytes(32)
-        self.connection.session_iv = token_bytes(16)
+        self.session_key = token_bytes(32)
+        self.session_iv = token_bytes(16)
 
-        logger.info(f"Generated Session Key: {self.connection.session_key.hex()}")
-        logger.info(f"Generated Session IV: {self.connection.session_iv.hex()}")
+        logger.info(f"Generated Session Key: {self.session_key.hex()}")
+        logger.info(f"Generated Session IV: {self.session_iv.hex()}")
 
+        # Only the cipher is needed by the connection for subsequent encrypted traffic
         self.connection.cipher = Cipher(
-            algorithms.AES(self.connection.session_key),
-            modes.CBC(self.connection.session_iv),
+            algorithms.AES(self.session_key),
+            modes.CBC(self.session_iv),
             backend=default_backend(),
         )
         secret_payload = (
-            f"{self.connection.session_key.hex()}:::{self.connection.session_iv.hex()}"
+            f"{self.session_key.hex()}:::{self.session_iv.hex()}"
         )
 
-        encrypted_secret = self.connection.public_key.encrypt(
+        encrypted_secret = self.public_key.encrypt(
             secret_payload.encode("utf-8"), padding.PKCS1v15()
         )
 

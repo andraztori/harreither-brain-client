@@ -9,7 +9,7 @@ description = "Unofficial client library and CLI for Harreither Brain devices"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-authors = [{ name = ""Harreither Brain Client Contributors" }]
+authors = [{ name = "Andraz Tori" }]
 dependencies = [
     "websockets>=12.0",
     "cryptography>=41.0",
