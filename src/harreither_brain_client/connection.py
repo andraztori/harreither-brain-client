@@ -14,6 +14,13 @@ from .message import MessageReceived, MessageSend
 
 logger = logging.getLogger(__name__)
 
+
+class QueuedMessage:
+    """Wrapper for a message to be sent along with its optional ACK callback."""
+    def __init__(self, message: MessageSend, async_ack_callback=None):
+        self.message = message
+        self.async_ack_callback = async_ack_callback
+
 KEEPALIVE_INTERVAL = 270.0
 MINIMUM_MC = 20000  # minimum message count number
 MAXIMUM_MC = 32000  # maximum message count number
@@ -21,9 +28,15 @@ HEADERS = {}
 
 
 class Connection:
-    def __init__(self, *, strict_mode: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        strict_mode: bool = False,
+        message_log_filename: str | None = None,
+    ) -> None:
         self.ws = None
         self.strict = strict_mode
+        self.message_log_filename = message_log_filename
         self.device_id = None
         self.device_version = None
         self.connection_id = None
@@ -40,6 +53,25 @@ class Connection:
         self.message_queue = asyncio.Queue()
         self.message_counter = MINIMUM_MC
         self.cipher = None
+        self.pending_ack_callbacks = {}  # ref -> callback mapping
+
+    def _log_raw_message(self, direction: str, payload: str) -> None:
+        """Append raw message text to the log file, if configured."""
+        if not self.message_log_filename:
+            return
+        try:
+            # Parse JSON and pretty-print it
+            try:
+                parsed = json.loads(payload)
+                pretty_payload = json.dumps(parsed, indent=2)
+            except (json.JSONDecodeError, ValueError):
+                # If not valid JSON, use as-is
+                pretty_payload = payload
+            
+            with open(self.message_log_filename, "a", encoding="utf-8") as f:
+                f.write(f"{direction}\n{pretty_payload}\n\n")
+        except Exception:  # pragma: no cover - logging should not break flow
+            logger.warning("Failed to write raw message log", exc_info=True)
 
     def set_async_notify_update_callback(self, callback) -> None:
         self.async_notify_update_callback = callback
@@ -99,6 +131,8 @@ class Connection:
         decryptor = self.cipher.decryptor()
         decrypted_padded = decryptor.update(encrypted_data) + decryptor.finalize()
         decrypted_msg = decrypted_padded.rstrip(b"\x00").decode("utf-8")
+
+        self._log_raw_message("recv", decrypted_msg)
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Received decrypted JSON: {decrypted_msg}")
@@ -177,7 +211,11 @@ class Connection:
                     raise exception_to_raise
 
                 if queued_msg is not None:
-                    await self.send_message(queued_msg)
+                    # Extract MessageSend and register callback if present
+                    msg_to_send = queued_msg.message
+                    if queued_msg.async_ack_callback and msg_to_send.mc:
+                        self.pending_ack_callbacks[msg_to_send.mc] = queued_msg.async_ack_callback
+                    await self.send_message(msg_to_send)
 
                 if msg is not None:
                     await self.async_dispatch_message(msg)
@@ -202,6 +240,8 @@ class Connection:
     async def async_dispatch_message(self, msg: MessageReceived) -> None:
         if msg.type_int == TypeInt.ACK:
             await self.recv_ACK(msg)
+        elif msg.type_int == TypeInt.NACK:
+            await self.recv_NACK(msg)
         elif msg.type_int == TypeInt.WAIT4ACK:
             # Device sends WAIT4ACK if it cannot answer the request within 3 seconds
             logger.debug("Received WAIT4ACK, device is processing request")
@@ -233,8 +273,21 @@ class Connection:
 
     async def recv_ACK(self, msg: MessageReceived) -> None:
         ref = msg.ref
-        logger.info("ACK received for ref: %s", ref)
         logger.debug("Received ACK for ref: %s", ref)
+        
+        # Call callback if registered
+        callback = self.pending_ack_callbacks.pop(ref, None)
+        if callback is not None:
+            await callback(True)
+
+    async def recv_NACK(self, msg: MessageReceived) -> None:
+        ref = msg.ref
+        logger.debug("Received NACK for ref: %s", ref)
+        
+        # Call callback if registered
+        callback = self.pending_ack_callbacks.pop(ref, None)
+        if callback is not None:
+            await callback(False)
 
     async def send_message(self, msg: MessageSend) -> None:
         data = {
@@ -250,7 +303,10 @@ class Connection:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Sending JSON: {data}")
 
-        msg_bytes = json.dumps(data).encode("utf-8")
+        json_text = json.dumps(data)
+        self._log_raw_message("send", json_text)
+
+        msg_bytes = json_text.encode("utf-8")
         await self.encrypt_and_send_raw_message(msg_bytes)
 
     def new_message_reference(self) -> int:
@@ -268,8 +324,24 @@ class Connection:
         await self.send_message(msg)
         logger.debug("Sent ACTION_SELECTED with ScreenID=100")
 
-    async def enqueue_message(self, msg: MessageSend) -> None:
-        await self.message_queue.put(msg)
+    async def enqueue_message(self, msg: MessageSend, async_ack_callback=None) -> None:
+        queued = QueuedMessage(msg, async_ack_callback)
+        await self.message_queue.put(queued)
+
+    async def enqueue_message_get_ack(self, msg: MessageSend) -> bool:
+        """Enqueue a message and wait for ACK/NACK. Returns True for ACK, False for NACK."""
+        ack_event = asyncio.Event()
+        ack_result = {"success": False}
+        
+        async def ack_callback(is_ack: bool):
+            ack_result["success"] = is_ack
+            ack_event.set()
+        
+        queued = QueuedMessage(msg, ack_callback)
+        await self.message_queue.put(queued)
+        
+        await ack_event.wait()
+        return ack_result["success"]
 
     async def encrypt_and_send_raw_message(self, msg_bytes):
         pad_len = 16 - (len(msg_bytes) % 16)

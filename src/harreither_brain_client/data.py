@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 from typing import Any, Tuple
@@ -34,18 +35,50 @@ class Entries:
             return self._entries.get((key[0], key[1], None))
         return None
 
+    def _normalize_without_names(self, value):
+        """Deep-copy a structure while removing 'name' and 'highlight' fields for comparisons."""
+        # Deep copy first to avoid modifying the original
+        value = copy.deepcopy(value)
+        
+        if isinstance(value, dict):
+            # Remove name and highlight fields if present
+            value.pop("name", None)
+            value.pop("highlight", None)
+            # Recursively normalize nested values
+            for k, v in value.items():
+                value[k] = self._normalize_without_names(v)
+            return value
+        if isinstance(value, list):
+            return [self._normalize_without_names(v) for v in value]
+        return value
+
     async def create_entry(self, key, entry):
-        if key[1] == 0:
-            return
+        #if key[1] == 0:
+        #    return
+        new = True
+
         if key in self._entries:
-            raise ValueError(
-                f"create_entry() Entry {key} already exists, current data: {self._entries[key]}, new data: {entry}"
-            )
+            vid_obj = entry.get("vid_obj", {})
+
+            # Only enforce duplicate checks in strict mode
+            if self.data.connection.strict and vid_obj.get("type") not in (23, 4):
+                existing_norm = self._normalize_without_names(self._entries[key])
+                incoming_norm = self._normalize_without_names(entry)
+
+                if existing_norm != incoming_norm:
+                    raise ValueError(
+                        f"create_entry() Entry {key} already exists, current data: {self._entries[key]}, new data: {entry}"
+                    )
+                logger.debug(
+                    "create_entry() Entry %s already exists with identical content (ignoring name fields), overwriting",
+                    key,
+                )
+                new = False
         self._entries[key] = entry
-        await self.data.connection.async_notify_update(key, entry, True)
+        await self.data.connection.async_notify_update(key, entry, new)
 
     async def update_entry(self, key, updated_entry):
-        if key == (0, 0, None) or key == (317, 1, None):
+        if key == (0, 0, None):
             return
         entry = self.get_entry(key)
         if entry is None:
@@ -113,16 +146,16 @@ class Data:
             raise ValueError("ADD_SCREEN message missing 'screen' dictionary")
         screen_data = payload["screen"]
 
-        allowed_keys = {"screenID", "title", "statuspage", "itemCount"}
+        allowed_keys = {"screenID", "title", "statuspage", "itemCount", "objID", "iconID"}
         self.entries.validate_keys(screen_data, allowed_keys, "Screen dictionary")
 
         screen_id = screen_data.get("screenID")
+        obj_id = screen_data.get("objID")
+        print("ADDING SCREEN:", (screen_id, obj_id))
         if screen_id is not None:
-            self.screens[screen_id] = screen_data
+            self.screens[(screen_id, obj_id)] = screen_data
 
-        if logger.isEnabledFor(logging.DEBUG):
-            with open("screens.json", "w", encoding="utf-8") as f:
-                json.dump(self.screens, f, indent=4, ensure_ascii=False)
+        self.save_screens()
 
         await self.connection.send_ack_message(message)
 
@@ -167,18 +200,22 @@ class Data:
         )
         payload = message.payload
         self.entries.validate_keys(
-            payload, {"screenID", "pos", "items", "end"}, "ADD_ITEMS payload"
+            payload, {"screenID", "pos", "items", "end", "objID", }, "ADD_ITEMS payload"
         )
         screen_id = payload.get("screenID")
+        obj_id = payload.get("objID")
 
-        if screen_id not in self.screens:
+        screen_key = (screen_id, obj_id)
+        print("ADDING ITEMS:", (screen_id, obj_id))
+
+        if screen_key not in self.screens:
             logger.warning(
                 f"Received ADD_ITEMS for unknown screenID: {screen_id}. Initializing screen entry."
             )
-            self.screens[screen_id] = {"screenID": screen_id}
+            self.screens[screen_key] = {"screenID": screen_id, "objID": obj_id}
 
-        if "items" not in self.screens[screen_id]:
-            self.screens[screen_id]["items"] = []
+        if "items" not in self.screens[screen_key]:
+            self.screens[screen_key]["items"] = []
 
         def fix_item(it):
             allowed_keys = {
@@ -191,6 +228,7 @@ class Data:
                 "valstr",
                 "objID",
                 "citems",
+                "highlight"
             }
             self.entries.validate_keys(it, allowed_keys, "Item")
 
@@ -206,14 +244,12 @@ class Data:
 
         new_items = [fix_item(it) for it in payload.get("items", [])]
         await self.add_entries(new_items)
-        self.screens[screen_id]["items"].extend(new_items)
+        self.screens[screen_key]["items"].extend(new_items)
 
-        if logger.isEnabledFor(logging.DEBUG):
-            with open("screens.json", "w", encoding="utf-8") as f:
-                json.dump(self.screens, f, indent=4, ensure_ascii=False)
+        self.save_screens()
 
         logger.info(
-            f"Updated screen {screen_id} with {len(new_items)} items. Total: {len(self.screens[screen_id].get('items', []))}"
+            f"Updated screen {screen_id} with {len(new_items)} items. Total: {len(self.screens[screen_key].get('items', []))}"
         )
         await self.connection.send_ack_message(message)
 
@@ -255,9 +291,7 @@ class Data:
 
         self.save_entries()
 
-        if logger.isEnabledFor(logging.DEBUG):
-            with open("screens.json", "w", encoding="utf-8") as f:
-                json.dump(self.screens, f, indent=4, ensure_ascii=False)
+        self.save_screens()
 
         await self.connection.send_ack_message(message)
 
@@ -289,4 +323,11 @@ class Data:
         dumpable = {str(k): v for k, v in self.entries._entries.items()}
         if logger.isEnabledFor(logging.DEBUG):
             with open("entries.json", "w", encoding="utf-8") as f:
+                json.dump(dumpable, f, indent=4, ensure_ascii=False)
+
+    def save_screens(self):
+        """Save screens dict with tuple keys to JSON, converting keys to strings."""
+        if logger.isEnabledFor(logging.DEBUG):
+            dumpable = {str(k): v for k, v in self.screens.items()}
+            with open("screens.json", "w", encoding="utf-8") as f:
                 json.dump(dumpable, f, indent=4, ensure_ascii=False)
