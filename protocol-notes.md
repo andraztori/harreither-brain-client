@@ -18,3 +18,7 @@ When object has a type 1, this means that the button is meant to be
 rendered. That button then takes us to a screen in this way:
   - new screenid is "detail" and if there is an "objID", this is another
     qualifier as screens are defined by screenid+objID
+
+"Pushing" various buttons by taking ACTION 201 does not have any effect
+unless we have previously moved to that screen with ACTION 200. It does not
+return error, but just silently breaks.
