@@ -35,21 +35,22 @@ class Entries:
             return self._entries.get((key[0], key[1], None))
         return None
 
-    def _normalize_without_names(self, value):
-        """Deep-copy a structure while removing 'name' and 'highlight' fields for comparisons."""
+    def _normalize_entry(self, value):
+        """Deep-copy a structure while removing 'name', 'highlight', and '_screen_key' fields for comparisons."""
         # Deep copy first to avoid modifying the original
         value = copy.deepcopy(value)
         
         if isinstance(value, dict):
-            # Remove name and highlight fields if present
+            # Remove name, highlight, and _screen_key fields if present
             value.pop("name", None)
             value.pop("highlight", None)
+            value.pop("_screen_key", None)
             # Recursively normalize nested values
             for k, v in value.items():
-                value[k] = self._normalize_without_names(v)
+                value[k] = self._normalize_entry(v)
             return value
         if isinstance(value, list):
-            return [self._normalize_without_names(v) for v in value]
+            return [self._normalize_entry(v) for v in value]
         return value
 
     async def create_entry(self, key, entry):
@@ -58,12 +59,12 @@ class Entries:
         new = True
 
         if key in self._entries:
-            vid_obj = entry.get("vid_obj", {})
+            _vid_obj = entry.get("_vid_obj", {})
 
             # Only enforce duplicate checks in strict mode
-            if self.data.connection.strict and vid_obj.get("type") not in (23, 4):
-                existing_norm = self._normalize_without_names(self._entries[key])
-                incoming_norm = self._normalize_without_names(entry)
+            if self.data.connection.strict and _vid_obj.get("type") not in (23, 4):
+                existing_norm = self._normalize_entry(self._entries[key])
+                incoming_norm = self._normalize_entry(entry)
 
                 if existing_norm != incoming_norm:
                     raise ValueError(
@@ -151,7 +152,6 @@ class Data:
 
         screen_id = screen_data.get("screenID")
         obj_id = screen_data.get("objID")
-        print("ADDING SCREEN:", (screen_id, obj_id))
         if screen_id is not None:
             self.screens[(screen_id, obj_id)] = screen_data
 
@@ -188,7 +188,7 @@ class Data:
                 self.dbentries[vid] = entry
         logger.debug(f"Current dbentries count: {len(self.dbentries)}")
 
-        if logger.isEnabledFor(logging.DEBUG):
+        if self.connection.dump_entities:
             with open("dbentries.json", "w", encoding="utf-8") as f:
                 json.dump(self.dbentries, f, indent=4, ensure_ascii=False)
 
@@ -206,7 +206,6 @@ class Data:
         obj_id = payload.get("objID")
 
         screen_key = (screen_id, obj_id)
-        print("ADDING ITEMS:", (screen_id, obj_id))
 
         if screen_key not in self.screens:
             logger.warning(
@@ -234,9 +233,12 @@ class Data:
 
             vid = it.get("VID")
             if vid is not None:
-                vid_obj = self.dbentries.get(vid)
-                if vid_obj is not None:
-                    it["vid_obj"] = vid_obj
+                _vid_obj = self.dbentries.get(vid)
+                if _vid_obj is not None:
+                    it["_vid_obj"] = _vid_obj
+
+            # Add screen key reference
+            it["_screen_key"] = screen_key
 
             if "citems" in it and isinstance(it["citems"], list):
                 it["citems"] = [fix_item(cit) for cit in it["citems"]]
@@ -290,7 +292,6 @@ class Data:
             await self.entries.update_entry(key, u_item)
 
         self.save_entries()
-
         self.save_screens()
 
         await self.connection.send_ack_message(message)
@@ -299,9 +300,9 @@ class Data:
         for item in items:
             vid = item.get("VID")
             if vid is not None:
-                vid_obj = self.dbentries.get(vid)
-                if vid_obj is not None:
-                    item["vid_obj"] = vid_obj
+                _vid_obj = self.dbentries.get(vid)
+                if _vid_obj is not None:
+                    item["_vid_obj"] = _vid_obj
 
             if "detail" in item:
                 if objID:
@@ -321,13 +322,24 @@ class Data:
 
     def save_entries(self):
         dumpable = {str(k): v for k, v in self.entries._entries.items()}
-        if logger.isEnabledFor(logging.DEBUG):
+        if self.connection.dump_entities:
             with open("entries.json", "w", encoding="utf-8") as f:
                 json.dump(dumpable, f, indent=4, ensure_ascii=False)
 
     def save_screens(self):
-        """Save screens dict with tuple keys to JSON, converting keys to strings."""
-        if logger.isEnabledFor(logging.DEBUG):
-            dumpable = {str(k): v for k, v in self.screens.items()}
+        """Save screens dict with tuple keys to JSON, converting keys to strings and removing _screen_key."""
+        if self.connection.dump_entities:
+            # Helper to recursively remove _screen_key from items
+            def remove_screen_key(obj):
+                if isinstance(obj, dict):
+                    result = {k: remove_screen_key(v) for k, v in obj.items() if k != "_screen_key"}
+                    return result
+                elif isinstance(obj, list):
+                    return [remove_screen_key(item) for item in obj]
+                return obj
+            
+            # Clean screens data
+            cleaned_screens = remove_screen_key(self.screens)
+            dumpable = {str(k): v for k, v in cleaned_screens.items()}
             with open("screens.json", "w", encoding="utf-8") as f:
                 json.dump(dumpable, f, indent=4, ensure_ascii=False)

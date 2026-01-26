@@ -7,13 +7,6 @@ from .connection import Connection
 from .message import MessageSend
 from .type_int import TypeInt
 
-# Thread and async-safe queue for type 1 entries to explore
-explore_queue: asyncio.Queue = None
-
-# Track which entry keys we've already requested
-requested_keys: set = set()
-requested_keys_lock: asyncio.Lock = None
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Harreither Brain CLI Client")
@@ -48,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="If set, log raw messages to this file",
     )
     parser.add_argument(
+        "--dumpentities",
+        action="store_true",
+        help="Dump dbentries, entries, and screens JSON files to disk",
+    )
+    parser.add_argument(
         "-a",
         action="store_true",
         help="Send single ACTION_SELECTED sequence variant A",
@@ -71,25 +69,6 @@ def configure_logging(verbose: bool) -> None:
     # Suppress debug logging for websockets even in verbose mode
     if verbose:
         logging.getLogger("websockets.client").setLevel(logging.INFO)
-
-
-
-
-async def print_update_callback(key: str, value_dict: dict, new: bool) -> None:
-    """Print updates as they arrive from the server."""
-    # vid 317 is system time
-    # vid 318 is "a problem"
-    if key == (0, 0, None) or key == (317, 1, None)or key == (318, 1, None):
-        return
-    update_type = "NEW" if new else "UPDATE"
-    print(f"[{update_type}] {key}: {value_dict}")
-    
-    # Check if this is a type 1 entry and add to explore queue
-    if new and explore_queue is not None:
-        vid_obj = value_dict.get("vid_obj", {})
-        if vid_obj.get("type") == 1:
-            await explore_queue.put((key, value_dict))
-            logging.debug(f"Added type 1 entry to explore queue: {key}")
 
 
 def get_entry_from_payload(conn_obj: Connection, payload: dict):
@@ -127,7 +106,7 @@ async def send_single_action_a(conn_obj: Connection) -> None:
     logging.info(f"Received ACK for second message (A): {ack2}")
 
     # Wait 3 seconds before third message
-    await asyncio.sleep(3)
+#    await asyncio.sleep(3)
 
     # Third message
     msg3 = MessageSend(
@@ -151,87 +130,12 @@ async def send_single_action_b(conn_obj: Connection) -> None:
     msg = MessageSend(
         type_int=TypeInt.ACTION_SELECTED,
         mc=conn_obj.new_message_reference(),
-        payload={"VID": 3,"detail": 1009, "objID": 30123},
+        payload={"VID": 3, "detail": 1009, "objID": 30123},
     )
     logging.info(f"Sending ACTION_SELECTED (B) with payload: {msg.payload}")
     ack = await conn_obj.enqueue_message_get_ack(msg)
     logging.info(f"Received ACK for ACTION_SELECTED (B): {ack}")
     
-
-async def request_type1_entries(conn_obj: Connection) -> None:
-    """Request details for all type 1 entries as they appear in the explore queue."""
-    logging.info("Waiting for initialization to complete...")
-    await conn_obj.event_initial_setup_complete.wait()
-    logging.info("Initialization complete. Processing type 1 entries from queue...")
-    
-    type1_count = 0
-    
-    # Continuously pull items from the explore queue
-    while True:
-        try:
-            # Wait for items from the queue with a timeout
-            key, entry = await asyncio.wait_for(explore_queue.get(), timeout=1.0)
-            
-            # Check if we already requested data for this key
-            async with requested_keys_lock:
-                if key in requested_keys:
-                    logging.debug(f"Already requested data for {key}, skipping")
-                    continue
-                requested_keys.add(key)
-            
-            type1_count += 1
-            vid = key[0]
-            detail = key[1]
-            obj_id = key[2]
-            
-            # Build the payload
-            payload = {"VID": vid, "detail": detail}
-            if obj_id is not None:
-                payload["objID"] = obj_id
-            '''
-            # If targeting VID=3 and detail=1009, send ACTUAL_SCREEN 101 first
-            if vid == 3 and detail == 1009:
-                pre_msg = MessageSend(
-                    type_int=TypeInt.ACTUAL_SCREEN,
-                    mc=conn_obj.new_message_reference(),
-                    payload={"screenID": 101},
-                )
-                logging.debug("Sending ACTUAL_SCREEN with screenID=101 prior to ACTION_SELECTED 3/1009")
-                pre_ack = await conn_obj.enqueue_message_get_ack(pre_msg)
-                if pre_ack:
-                    logging.debug("Received ACK for ACTUAL_SCREEN 101")
-                else:
-                    logging.warning("Received NACK for ACTUAL_SCREEN 101")
-            '''
-            await asyncio.sleep(1)
-            
-            # Create and enqueue the ACTION_SELECTED message
-            msg = MessageSend(
-                type_int=TypeInt.ACTION_SELECTED,
-                mc=conn_obj.new_message_reference(),
-                payload=payload,
-            )
-            
-            logging.debug(f"Enqueued ACTION_SELECTED for {key}: {payload}")
-            
-            # Log to explored.txt
-            with open("explored.txt", "a", encoding="utf-8") as f:
-                f.write(f"{key}\n")
-            
-            # Wait for ACK/NACK
-            ack_result = await conn_obj.enqueue_message_get_ack(msg)
-            if ack_result:
-                logging.debug(f"Received ACK for {key}")
-            else:
-                logging.warning(f"Received NACK for {key}")
-            
-        except asyncio.TimeoutError:
-            # No items in queue for 1 second, continue waiting
-            continue
-        except asyncio.CancelledError:
-            logging.info(f"Type 1 entry processing stopped. Processed {type1_count} entries.")
-            raise
-
 
 async def run_client(
     *,
@@ -243,13 +147,16 @@ async def run_client(
     logfile: str | None,
     use_single_action_a: bool,
     use_single_action_b: bool,
+    dump_entities: bool,
 ) -> None:
-    global explore_queue, requested_keys_lock
-    explore_queue = asyncio.Queue()
-    requested_keys_lock = asyncio.Lock()
-    
-    conn_obj = Connection(strict_mode=strict, message_log_filename=logfile)
-    conn_obj.set_async_notify_update_callback(print_update_callback)
+    # Default mode (no single action) means we traverse screens
+    traverse_screens_on_init = not (use_single_action_a or use_single_action_b)
+    conn_obj = Connection(
+        strict_mode=strict,
+        message_log_filename=logfile,
+        dump_entities=dump_entities,
+        traverse_screens_on_init=traverse_screens_on_init,
+    )
     
     try:
         await conn_obj.async_websocket_connect(host, proxy_url=proxy_url)
@@ -277,7 +184,6 @@ async def run_client(
         else:
             await asyncio.gather(
                 conn_obj.messages_process(),
-                request_type1_entries(conn_obj),
             )
 
     except asyncio.CancelledError:
@@ -307,6 +213,7 @@ def main(argv: list[str] | None = None) -> None:
             logfile=args.logfile,
             use_single_action_a=args.a,
             use_single_action_b=args.b,
+            dump_entities=args.dumpentities,
         )
     )
 

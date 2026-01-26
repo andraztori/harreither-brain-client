@@ -33,10 +33,14 @@ class Connection:
         *,
         strict_mode: bool = False,
         message_log_filename: str | None = None,
+        dump_entities: bool = False,
+        traverse_screens_on_init: bool = False,
     ) -> None:
         self.ws = None
         self.strict = strict_mode
         self.message_log_filename = message_log_filename
+        self.dump_entities = dump_entities
+        self.traverse_screens_on_init = traverse_screens_on_init
         self.device_id = None
         self.device_version = None
         self.connection_id = None
@@ -45,8 +49,9 @@ class Connection:
         self.device_home_id = None
         self.device_home_name = None
         self.sc_id = None
-        self.async_notify_update_callback = None
+        self.async_notify_update_callbacks = []
         self.event_initial_setup_complete = asyncio.Event()
+        self.event_initial_traverse_screens_complete = asyncio.Event()
         self.data = Data(self)
         self.establish_connection_obj = EstablishConnection(self)
         self.authentication_obj = Authenticate(self)
@@ -54,6 +59,15 @@ class Connection:
         self.message_counter = MINIMUM_MC
         self.cipher = None
         self.pending_ack_callbacks = {}  # ref -> callback mapping
+        
+        # Create TraverseScreens object if screen traversal is enabled
+        self.traverse_screens_obj = None
+        if self.traverse_screens_on_init:
+            from .traverse_screens import TraverseScreens
+            self.traverse_screens_obj = TraverseScreens(self)
+            # we need to add it here, before connection is being initialized
+            # as it has to intercept messages that send over the initial screens
+            self.add_async_notify_update_callback(self.traverse_screens_obj.entry_update_callback)
 
     def _log_raw_message(self, direction: str, payload: str) -> None:
         """Append raw message text to the log file, if configured."""
@@ -73,12 +87,34 @@ class Connection:
         except Exception:  # pragma: no cover - logging should not break flow
             logger.warning("Failed to write raw message log", exc_info=True)
 
-    def set_async_notify_update_callback(self, callback) -> None:
-        self.async_notify_update_callback = callback
+    def add_async_notify_update_callback(self, callback) -> None:
+        if callback not in self.async_notify_update_callbacks:
+            self.async_notify_update_callbacks.append(callback)
+    
+    def remove_async_notify_update_callback(self, callback) -> None:
+        if callback in self.async_notify_update_callbacks:
+            self.async_notify_update_callbacks.remove(callback)
 
     async def async_notify_update(self, key, value_dict, new):
-        if self.async_notify_update_callback is not None:
-            await self.async_notify_update_callback(key, value_dict, new)
+        for callback in self.async_notify_update_callbacks:
+            await callback(key, value_dict, new)
+
+    async def initial_connection_setup_complete(self) -> None:
+        """Called when initial connection setup is complete (after SET_ALERTS)."""
+        if not self.event_initial_setup_complete.is_set():
+            self.event_initial_setup_complete.set()
+            # If traverse_screens is enabled, start traversal in background
+            # Note: traverse_screens will wait for event_initial_setup_complete before proceeding anyway
+            if self.traverse_screens_obj:
+                async def run_traverse():
+                    try:
+                        await self.traverse_screens_obj.traverse_screens()
+                    except Exception as e:
+                        logger.error("Error during traverse_screens: %s", e, exc_info=True)
+                    finally:
+                        self.remove_async_notify_update_callback(self.traverse_screens_obj.entry_update_callback)
+                        self.event_initial_traverse_screens_complete.set()
+                asyncio.create_task(run_traverse())
 
     async def enqueue_authentication_flow(
         self,
@@ -264,8 +300,7 @@ class Connection:
         elif msg.type_int == TypeInt.SET_ALERTS:
             await self.data.recv_SET_ALERTS(msg)
             # there is no formal "initialization complete" message, but when alerts come, everything else seem to be already setup
-            if not self.event_initial_setup_complete.is_set():
-                self.event_initial_setup_complete.set()
+            await self.initial_connection_setup_complete()
         elif msg.type_int == TypeInt.UPDATE_ITEMS:
             await self.data.recv_UPDATE_ITEMS(msg)
         else:
@@ -331,17 +366,17 @@ class Connection:
     async def enqueue_message_get_ack(self, msg: MessageSend) -> bool:
         """Enqueue a message and wait for ACK/NACK. Returns True for ACK, False for NACK."""
         ack_event = asyncio.Event()
-        ack_result = {"success": False}
+        ack_result = False
         
         async def ack_callback(is_ack: bool):
-            ack_result["success"] = is_ack
+            ack_result = is_ack
             ack_event.set()
         
         queued = QueuedMessage(msg, ack_callback)
         await self.message_queue.put(queued)
         
         await ack_event.wait()
-        return ack_result["success"]
+        return ack_result
 
     async def encrypt_and_send_raw_message(self, msg_bytes):
         pad_len = 16 - (len(msg_bytes) % 16)
