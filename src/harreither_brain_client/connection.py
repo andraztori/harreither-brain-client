@@ -7,7 +7,7 @@ from contextlib import suppress
 import websockets
 
 from .authenticate import Authenticate
-from .data import Data
+from .data import Data, Entry
 from .establish_connection import EstablishConnection
 from .type_int import TypeInt
 from .message import MessageReceived, MessageSend
@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 
 class QueuedMessage:
     """Wrapper for a message to be sent along with its optional ACK callback."""
+
     def __init__(self, message: MessageSend, async_ack_callback=None):
         self.message = message
         self.async_ack_callback = async_ack_callback
+
 
 KEEPALIVE_INTERVAL = 270.0
 MINIMUM_MC = 20000  # minimum message count number
@@ -59,15 +61,18 @@ class Connection:
         self.message_counter = MINIMUM_MC
         self.cipher = None
         self.pending_ack_callbacks = {}  # ref -> callback mapping
-        
+
         # Create TraverseScreens object if screen traversal is enabled
         self.traverse_screens_obj = None
         if self.traverse_screens_on_init:
             from .traverse_screens import TraverseScreens
+
             self.traverse_screens_obj = TraverseScreens(self)
             # we need to add it here, before connection is being initialized
             # as it has to intercept messages that send over the initial screens
-            self.add_async_notify_update_callback(self.traverse_screens_obj.entry_update_callback)
+            self.add_async_notify_update_callback(
+                self.traverse_screens_obj.entry_update_callback
+            )
 
     def _log_raw_message(self, direction: str, payload: str) -> None:
         """Append raw message text to the log file, if configured."""
@@ -81,7 +86,7 @@ class Connection:
             except (json.JSONDecodeError, ValueError):
                 # If not valid JSON, use as-is
                 pretty_payload = payload
-            
+
             with open(self.message_log_filename, "a", encoding="utf-8") as f:
                 f.write(f"{direction}\n{pretty_payload}\n\n")
         except Exception:  # pragma: no cover - logging should not break flow
@@ -90,14 +95,14 @@ class Connection:
     def add_async_notify_update_callback(self, callback) -> None:
         if callback not in self.async_notify_update_callbacks:
             self.async_notify_update_callbacks.append(callback)
-    
+
     def remove_async_notify_update_callback(self, callback) -> None:
         if callback in self.async_notify_update_callbacks:
             self.async_notify_update_callbacks.remove(callback)
 
-    async def async_notify_update(self, key, value_dict, new):
+    async def async_notify_update(self, key: tuple, entry: Entry, new: bool) -> None:
         for callback in self.async_notify_update_callbacks:
-            await callback(key, value_dict, new)
+            await callback(key, entry, new)
 
     async def initial_connection_setup_complete(self) -> None:
         """Called when initial connection setup is complete (after SET_ALERTS)."""
@@ -106,14 +111,20 @@ class Connection:
             # If traverse_screens is enabled, start traversal in background
             # Note: traverse_screens will wait for event_initial_setup_complete before proceeding anyway
             if self.traverse_screens_obj:
+
                 async def run_traverse():
                     try:
                         await self.traverse_screens_obj.traverse_screens()
                     except Exception as e:
-                        logger.error("Error during traverse_screens: %s", e, exc_info=True)
+                        logger.error(
+                            "Error during traverse_screens: %s", e, exc_info=True
+                        )
                     finally:
-                        self.remove_async_notify_update_callback(self.traverse_screens_obj.entry_update_callback)
+                        self.remove_async_notify_update_callback(
+                            self.traverse_screens_obj.entry_update_callback
+                        )
                         self.event_initial_traverse_screens_complete.set()
+
                 asyncio.create_task(run_traverse())
 
     async def enqueue_authentication_flow(
@@ -250,7 +261,9 @@ class Connection:
                     # Extract MessageSend and register callback if present
                     msg_to_send = queued_msg.message
                     if queued_msg.async_ack_callback and msg_to_send.mc:
-                        self.pending_ack_callbacks[msg_to_send.mc] = queued_msg.async_ack_callback
+                        self.pending_ack_callbacks[msg_to_send.mc] = (
+                            queued_msg.async_ack_callback
+                        )
                     await self.send_message(msg_to_send)
 
                 if msg is not None:
@@ -309,7 +322,7 @@ class Connection:
     async def recv_ACK(self, msg: MessageReceived) -> None:
         ref = msg.ref
         logger.debug("Received ACK for ref: %s", ref)
-        
+
         # Call callback if registered
         callback = self.pending_ack_callbacks.pop(ref, None)
         if callback is not None:
@@ -318,7 +331,7 @@ class Connection:
     async def recv_NACK(self, msg: MessageReceived) -> None:
         ref = msg.ref
         logger.debug("Received NACK for ref: %s", ref)
-        
+
         # Call callback if registered
         callback = self.pending_ack_callbacks.pop(ref, None)
         if callback is not None:
@@ -367,14 +380,14 @@ class Connection:
         """Enqueue a message and wait for ACK/NACK. Returns True for ACK, False for NACK."""
         ack_event = asyncio.Event()
         ack_result = False
-        
+
         async def ack_callback(is_ack: bool):
             ack_result = is_ack
             ack_event.set()
-        
+
         queued = QueuedMessage(msg, ack_callback)
         await self.message_queue.put(queued)
-        
+
         await ack_event.wait()
         return ack_result
 

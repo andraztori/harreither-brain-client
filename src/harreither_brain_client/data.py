@@ -6,6 +6,114 @@ from typing import Any, Tuple
 logger = logging.getLogger(__name__)
 
 
+class Entry(dict):
+    """A dict-like entry with built-in normalization."""
+
+    def normalize(self) -> Any:
+        """Deep-copy self while removing 'name', 'highlight', and '_screen_key' fields for comparisons."""
+        return self._normalize_value(dict(self))
+
+    @staticmethod
+    def _normalize_value(value: Any) -> Any:
+        """Helper method to normalize a dict-representation of an entry recursively."""
+        if isinstance(value, dict):
+            # Remove name, highlight, and _screen_key fields if present
+            value = copy.deepcopy(value)
+            value.pop("name", None)  # we should not be doing that
+            value.pop("highlight", None)
+            value.pop("_screen_key", None)
+            # Recursively normalize nested values
+            for k, v in value.items():
+                value[k] = Entry._normalize_value(v)
+            return value
+        if isinstance(value, list):
+            return [Entry._normalize_value(v) for v in value]
+        return value
+
+    def message_select(self, value: int) -> "MessageSend":
+        """Create a SELECT message to change the device value.
+
+        Args:
+            value: The index of the selected option (0-based).
+
+        Returns:
+            A MessageSend object for the ACTION_EDITED_VALUE message.
+        """
+        from .message import MessageSend
+        from .type_int import TypeInt
+
+        vid = self.get("_vid")
+        detail = self.get("_detail")
+        objid = self.get("_objid")
+
+        payload: dict[str, Any] = {
+            "VID": vid,
+            "detail": detail,
+            "value": value,
+            "validity": 0,
+        }
+        if objid is not None:
+            payload["objID"] = objid
+
+        return MessageSend(
+            type_int=TypeInt.ACTION_EDITED_VALUE,
+            payload=payload,
+        )
+
+    def message_activate_entering_screen(self, connection: Any) -> "MessageSend":
+        """Create a message to activate the screen associated with this entry.
+
+        Args:
+            connection: The connection object to get message reference from.
+
+        Returns:
+            A MessageSend object for the ACTUAL_SCREEN message.
+        """
+        from .message import MessageSend
+        from .type_int import TypeInt
+
+        originating_screen_key = self.get("_screen_key")
+        if not originating_screen_key:
+            raise ValueError(f"Entry {self} has no _screen_key")
+
+        screen_id, screen_obj_id = originating_screen_key
+        screen_payload: dict[str, Any] = {"screenID": screen_id}
+        if screen_obj_id is not None:
+            screen_payload["objID"] = screen_obj_id
+
+        return MessageSend(
+            type_int=TypeInt.ACTUAL_SCREEN,
+            mc=connection.new_message_reference(),
+            payload=screen_payload,
+        )
+
+    def message_action_selected(self, connection: Any) -> "MessageSend":
+        """Create a message to trigger ACTION_SELECTED for this entry.
+
+        Args:
+            connection: The connection object to get message reference from.
+
+        Returns:
+            A MessageSend object for the ACTION_SELECTED message.
+        """
+        from .message import MessageSend
+        from .type_int import TypeInt
+
+        vid = self["VID"]
+        detail = self["detail"]
+        objid = self.get("objID")
+
+        payload: dict[str, Any] = {"VID": vid, "detail": detail}
+        if objid is not None:
+            payload["objID"] = objid
+
+        return MessageSend(
+            type_int=TypeInt.ACTION_SELECTED,
+            mc=connection.new_message_reference(),
+            payload=payload,
+        )
+
+
 class Entries:
     def __init__(self, data):
         self._entries = {}
@@ -22,56 +130,38 @@ class Entries:
                     extra_keys,
                     data,
                 )
-                raise ValueError(f"{context} contains unexpected fields: {extra_fields}")
+                raise ValueError(
+                    f"{context} contains unexpected fields: {extra_fields}"
+                )
 
     def make_key_from_object(self, object) -> Tuple[Any, Any, Any]:
         return (object.get("VID"), object["detail"], object.get("objID", None))
 
-    def get_entry(self, key: Tuple[Any, Any, Any]):
-        entry = self._entries.get(key)
-        if entry is not None:
-            return entry
-        if key[2] is not None:
-            return self._entries.get((key[0], key[1], None))
-        return None
+    def get_entry(self, key: Tuple[Any, Any, Any]) -> Entry | None:
+        return self._entries.get(key)
 
-    def _normalize_entry(self, value):
-        """Deep-copy a structure while removing 'name', 'highlight', and '_screen_key' fields for comparisons."""
-        # Deep copy first to avoid modifying the original
-        value = copy.deepcopy(value)
-        
-        if isinstance(value, dict):
-            # Remove name, highlight, and _screen_key fields if present
-            value.pop("name", None)
-            value.pop("highlight", None)
-            value.pop("_screen_key", None)
-            # Recursively normalize nested values
-            for k, v in value.items():
-                value[k] = self._normalize_entry(v)
-            return value
-        if isinstance(value, list):
-            return [self._normalize_entry(v) for v in value]
-        return value
-
-    async def create_entry(self, key, entry):
-        #if key[1] == 0:
+    async def create_entry(self, key, entry_data):
+        # if key[1] == 0:
         #    return
         new = True
+
+        # Create Entry object from input data
+        entry = Entry(entry_data)
 
         if key in self._entries:
             _vid_obj = entry.get("_vid_obj", {})
 
             # Only enforce duplicate checks in strict mode
             if self.data.connection.strict and _vid_obj.get("type") not in (23, 4):
-                existing_norm = self._normalize_entry(self._entries[key])
-                incoming_norm = self._normalize_entry(entry)
+                existing_norm = self._entries[key].normalize()
+                incoming_norm = entry.normalize()
 
                 if existing_norm != incoming_norm:
                     raise ValueError(
-                        f"create_entry() Entry {key} already exists, current data: {self._entries[key]}, new data: {entry}"
+                        f"create_entry() Entry {key} already exists, current data: {dict(self._entries[key])}, new data: {entry_data}"
                     )
                 logger.debug(
-                    "create_entry() Entry %s already exists with identical content (ignoring name fields), overwriting",
+                    "create_entry() Entry %s already exists with identical content (ignoring some fields), overwriting",
                     key,
                 )
                 new = False
@@ -83,11 +173,11 @@ class Entries:
             return
         entry = self.get_entry(key)
         if entry is None:
-            print("Not finding the entity to update", key, updated_entry)
-            return
+            raise ValueError(f"update_entry() Entry {key} does not exist")
 
         vid = key[0]
-        vid_info = self.data.dbentries.get(vid, {})
+        vid_info = self.data.dbentries[vid]
+        vid_text = vid_info["text"]
         vid_text = vid_info.get("text", f"VID:{vid}")
         entry_name = entry.get("name", "")
 
@@ -147,7 +237,14 @@ class Data:
             raise ValueError("ADD_SCREEN message missing 'screen' dictionary")
         screen_data = payload["screen"]
 
-        allowed_keys = {"screenID", "title", "statuspage", "itemCount", "objID", "iconID"}
+        allowed_keys = {
+            "screenID",
+            "title",
+            "statuspage",
+            "itemCount",
+            "objID",
+            "iconID",
+        }
         self.entries.validate_keys(screen_data, allowed_keys, "Screen dictionary")
 
         screen_id = screen_data.get("screenID")
@@ -200,7 +297,15 @@ class Data:
         )
         payload = message.payload
         self.entries.validate_keys(
-            payload, {"screenID", "pos", "items", "end", "objID", }, "ADD_ITEMS payload"
+            payload,
+            {
+                "screenID",
+                "pos",
+                "items",
+                "end",
+                "objID",
+            },
+            "ADD_ITEMS payload",
         )
         screen_id = payload.get("screenID")
         obj_id = payload.get("objID")
@@ -227,7 +332,7 @@ class Data:
                 "valstr",
                 "objID",
                 "citems",
-                "highlight"
+                "highlight",
             }
             self.entries.validate_keys(it, allowed_keys, "Item")
 
@@ -260,7 +365,9 @@ class Data:
             f"Received SET_ALERTS [302]. Payload size: {len(str(message.payload))}"
         )
         payload = message.payload
-        self.entries.validate_keys(payload, {"restart", "alerts", "end"}, "SET_ALERTS payload")
+        self.entries.validate_keys(
+            payload, {"restart", "alerts", "end"}, "SET_ALERTS payload"
+        )
 
         if payload.get("restart"):
             self.alerts = []
@@ -321,7 +428,7 @@ class Data:
             self.save_entries()
 
     def save_entries(self):
-        dumpable = {str(k): v for k, v in self.entries._entries.items()}
+        dumpable = {str(k): dict(v) for k, v in self.entries._entries.items()}
         if self.connection.dump_entities:
             with open("entries.json", "w", encoding="utf-8") as f:
                 json.dump(dumpable, f, indent=4, ensure_ascii=False)
@@ -332,12 +439,16 @@ class Data:
             # Helper to recursively remove _screen_key from items
             def remove_screen_key(obj):
                 if isinstance(obj, dict):
-                    result = {k: remove_screen_key(v) for k, v in obj.items() if k != "_screen_key"}
+                    result = {
+                        k: remove_screen_key(v)
+                        for k, v in obj.items()
+                        if k != "_screen_key"
+                    }
                     return result
                 elif isinstance(obj, list):
                     return [remove_screen_key(item) for item in obj]
                 return obj
-            
+
             # Clean screens data
             cleaned_screens = remove_screen_key(self.screens)
             dumpable = {str(k): v for k, v in cleaned_screens.items()}
