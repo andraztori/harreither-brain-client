@@ -93,8 +93,8 @@ class EstablishConnection:  # noqa: D101
         if not public_key or not device_signature:
             raise ValueError("Missing public_key or device_signature in payload")
 
-        logger.info(f"Public key [15]: {public_key}")
-        logger.info(f"Device signature [15]: {device_signature}")
+        logger.debug(f"Public key [15]: {public_key}")
+        logger.debug(f"Device signature [15]: {device_signature}")
 
         self.public_key = serialization.load_pem_public_key(
             public_key.encode("utf-8"), backend=default_backend()
@@ -105,8 +105,8 @@ class EstablishConnection:  # noqa: D101
         self.session_key = token_bytes(32)
         self.session_iv = token_bytes(16)
 
-        logger.info(f"Generated Session Key: {self.session_key.hex()}")
-        logger.info(f"Generated Session IV: {self.session_iv.hex()}")
+        logger.debug(f"Generated Session Key: {self.session_key.hex()}")
+        logger.debug(f"Generated Session IV: {self.session_iv.hex()}")
 
         # Only the cipher is needed by the connection for subsequent encrypted traffic
         self.connection.cipher = Cipher(

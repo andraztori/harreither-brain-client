@@ -50,11 +50,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Send single ACTION_SELECTED sequence variant A",
     )
-    parser.add_argument(
-        "-b",
-        action="store_true",
-        help="Send single ACTION_SELECTED sequence variant B",
-    )
     return parser
 
 
@@ -78,64 +73,72 @@ def get_entry_from_payload(conn_obj: Connection, payload: dict):
 
 
 async def send_single_action_a(conn_obj: Connection) -> None:
-    """Send a fixed ACTION_SELECTED sequence (variant A) and wait for ACK/NACK."""
-    logging.info("Waiting for initialization to complete...")
-    await conn_obj.event_initial_setup_complete.wait()
-    logging.info("Initialization complete. Sending ACTION_SELECTED sequence (A)...")
-
-    # First message
-    msg1 = MessageSend(
-        type_int=TypeInt.ACTION_SELECTED,
+    """Send a sequence of actions and wait for ACK/NACK."""
+    logging.info("Waiting for traversal to complete...")
+    await conn_obj.event_initial_traverse_screens_complete.wait()
+    logging.info("Traversal complete. Sending action sequence...")
+    '''
+    # 1. Activate screenID: 200
+    screen_msg = MessageSend(
+        type_int=TypeInt.ACTUAL_SCREEN,
         mc=conn_obj.new_message_reference(),
-        payload={"VID": 3, "detail": 1001, "objID": 1},
+        payload={"screenID": 200},
     )
-    entry1 = get_entry_from_payload(conn_obj, msg1.payload)
-    logging.info(f"Sent first ACTION_SELECTED (A) with payload: {msg1.payload}, entry: {entry1}")
-    ack1 = await conn_obj.enqueue_message_get_ack(msg1)
-    logging.info(f"Received ACK for first message (A): {ack1}")
-
-    # Second message
-    msg2 = MessageSend(
-        type_int=TypeInt.ACTION_SELECTED,
-        mc=conn_obj.new_message_reference(),
-        payload={"VID": 30003, "detail": 1, "objID": 1},
-    )
-    entry2 = get_entry_from_payload(conn_obj, msg2.payload)
-    logging.info(f"Sent second ACTION_SELECTED (A) with payload: {msg2.payload}, entry: {entry2}")
-    ack2 = await conn_obj.enqueue_message_get_ack(msg2)
-    logging.info(f"Received ACK for second message (A): {ack2}")
-
-    # Wait 3 seconds before third message
-#    await asyncio.sleep(3)
-
-    # Third message
-    msg3 = MessageSend(
-        type_int=TypeInt.ACTION_SELECTED,
-        mc=conn_obj.new_message_reference(),
-        payload={"VID": 30005, "detail": 1, "objID": 1},
-    )
-    entry3 = get_entry_from_payload(conn_obj, msg3.payload)
-    logging.info(f"Sent third ACTION_SELECTED (A) with payload: {msg3.payload}, entry: {entry3}")
-    ack3 = await conn_obj.enqueue_message_get_ack(msg3)
-    logging.info(f"Received ACK for third message (A): {ack3}")
-
-
-async def send_single_action_b(conn_obj: Connection) -> None:
-    """Send a single ACTION_SELECTED (variant B) and wait for ACK/NACK."""
-    logging.info("Waiting for initialization to complete...")
-    await conn_obj.event_initial_setup_complete.wait()
-    logging.info("Initialization complete. Sending single ACTION_SELECTED (B)...")
-
-    # Single message per request: detail=1009 and objID=30121
-    msg = MessageSend(
-        type_int=TypeInt.ACTION_SELECTED,
-        mc=conn_obj.new_message_reference(),
-        payload={"VID": 3, "detail": 1009, "objID": 30123},
-    )
-    logging.info(f"Sending ACTION_SELECTED (B) with payload: {msg.payload}")
-    ack = await conn_obj.enqueue_message_get_ack(msg)
-    logging.info(f"Received ACK for ACTION_SELECTED (B): {ack}")
+    logging.info(f"Sending ACTUAL_SCREEN with payload: {screen_msg.payload}")
+    screen_ack = await conn_obj.enqueue_message_get_ack(screen_msg)
+    logging.info(f"Received ACK for screen activation: {screen_ack}")
+    await asyncio.sleep(1)
     
+    # 2. Send ACTION_SELECTED message for entity {'VID': 30044, 'detail': 1012}
+    action_msg1 = MessageSend(
+        type_int=TypeInt.ACTION_SELECTED,
+        mc=conn_obj.new_message_reference(),
+        payload={"VID": 30044, "detail": 1012},
+    )
+    logging.info(f"Sending ACTION_SELECTED with payload: {action_msg1.payload}")
+    action_ack1 = await conn_obj.enqueue_message_get_ack(action_msg1)
+    logging.info(f"Received ACK for ACTION_SELECTED: {action_ack1}")
+    await asyncio.sleep(1)
+    
+    # 3. Send ACTION_SELECTED message for entity {'VID': 3, 'detail': 1013, 'objID': 30018}
+    action_msg2 = MessageSend(
+        type_int=TypeInt.ACTION_SELECTED,
+        mc=conn_obj.new_message_reference(),
+        payload={"VID": 3, "detail": 1013, "objID": 30018},
+    )
+    logging.info(f"Sending ACTION_SELECTED with payload: {action_msg2.payload}")
+    action_ack2 = await conn_obj.enqueue_message_get_ack(action_msg2)
+    logging.info(f"Received ACK for ACTION_SELECTED: {action_ack2}")
+    await asyncio.sleep(1)
+    
+    # 4. Activate entering screen for VID: 1161, detail: 30018
+    entry = conn_obj.data.entries.get_entry((1161, 30018, None))
+    if not entry:
+        # Try to find with any objID
+        for key, e in conn_obj.data.entries._entries.items():
+            if key[0] == 1161 and key[1] == 30018:
+                entry = e
+                break
+        if not entry:
+            raise ValueError("Entry with VID=1161, detail=30018 not found after traversal")
+    
+    '''
+
+    entry = conn_obj.data.entries.get_entry((1161, 30018, None))
+    '''
+    screen_msg = entry.message_activate_entering_screen(conn_obj)
+    logging.info(f"Sending message_activate_entering_screen with payload: {screen_msg.payload}")
+    screen_ack = await conn_obj.enqueue_message_get_ack(screen_msg)
+    logging.info(f"Received ACK: {screen_ack}")
+    '''
+
+    msg = entry.message_edit_value(0, conn_obj)
+    logging.info(f"Sending message_edit_value with payload: {msg.payload}")
+    ack = await conn_obj.enqueue_message_get_ack(msg)
+    logging.info(f"Received ACK: {ack}")
+    await asyncio.sleep(1)
+  
+
 
 async def run_client(
     *,
@@ -146,11 +149,10 @@ async def run_client(
     strict: bool,
     logfile: str | None,
     use_single_action_a: bool,
-    use_single_action_b: bool,
     dump_entities: bool,
 ) -> None:
     # Default mode (no single action) means we traverse screens
-    traverse_screens_on_init = not (use_single_action_a or use_single_action_b)
+    traverse_screens_on_init = True
     conn_obj = Connection(
         strict_mode=strict,
         message_log_filename=logfile,
@@ -171,12 +173,7 @@ async def run_client(
         )
         
         # Run messages_process and either send a single-action variant or request type 1 entries
-        if use_single_action_b:
-            await asyncio.gather(
-                conn_obj.messages_process(),
-                send_single_action_b(conn_obj),
-            )
-        elif use_single_action_a:
+        if use_single_action_a:
             await asyncio.gather(
                 conn_obj.messages_process(),
                 send_single_action_a(conn_obj),
@@ -212,7 +209,6 @@ def main(argv: list[str] | None = None) -> None:
             strict=args.strict,
             logfile=args.logfile,
             use_single_action_a=args.a,
-            use_single_action_b=args.b,
             dump_entities=args.dumpentities,
         )
     )

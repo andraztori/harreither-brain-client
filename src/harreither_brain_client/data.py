@@ -3,6 +3,9 @@ import json
 import logging
 from typing import Any, Tuple
 
+from .message import MessageSend
+from .type_int import TypeInt
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,21 +33,19 @@ class Entry(dict):
             return [Entry._normalize_value(v) for v in value]
         return value
 
-    def message_select(self, value: int) -> "MessageSend":
+    def message_edit_value(self, value: int, connection: Any) -> MessageSend:
         """Create a SELECT message to change the device value.
 
         Args:
             value: The index of the selected option (0-based).
+            connection: The connection object to get message reference from.
 
         Returns:
             A MessageSend object for the ACTION_EDITED_VALUE message.
         """
-        from .message import MessageSend
-        from .type_int import TypeInt
-
-        vid = self.get("_vid")
-        detail = self.get("_detail")
-        objid = self.get("_objid")
+        vid = self["VID"]
+        detail = self["detail"]
+        objid = self.get("objID")
 
         payload: dict[str, Any] = {
             "VID": vid,
@@ -57,10 +58,11 @@ class Entry(dict):
 
         return MessageSend(
             type_int=TypeInt.ACTION_EDITED_VALUE,
+            mc=connection.new_message_reference(),
             payload=payload,
         )
 
-    def message_activate_entering_screen(self, connection: Any) -> "MessageSend":
+    def message_activate_entering_screen(self, connection: Any) -> MessageSend:
         """Create a message to activate the screen associated with this entry.
 
         Args:
@@ -69,9 +71,6 @@ class Entry(dict):
         Returns:
             A MessageSend object for the ACTUAL_SCREEN message.
         """
-        from .message import MessageSend
-        from .type_int import TypeInt
-
         originating_screen_key = self.get("_screen_key")
         if not originating_screen_key:
             raise ValueError(f"Entry {self} has no _screen_key")
@@ -87,18 +86,15 @@ class Entry(dict):
             payload=screen_payload,
         )
 
-    def message_action_selected(self, connection: Any) -> "MessageSend":
+    def message_action_selected(self, connection: Any) -> MessageSend:
         """Create a message to trigger ACTION_SELECTED for this entry.
-
+            You need to activate the screen before that for this to work properly!
         Args:
             connection: The connection object to get message reference from.
 
         Returns:
             A MessageSend object for the ACTION_SELECTED message.
         """
-        from .message import MessageSend
-        from .type_int import TypeInt
-
         vid = self["VID"]
         detail = self["detail"]
         objid = self.get("objID")
@@ -170,6 +166,9 @@ class Entries:
 
     async def update_entry(self, key, updated_entry):
         if key == (0, 0, None):
+            return
+        if key == (318, 1, None):
+            logger.info(f"update_entry(): Got a update of an entry that does not exist, likely 318 is an error message: {key}, entry: {updated_entry}")
             return
         entry = self.get_entry(key)
         if entry is None:

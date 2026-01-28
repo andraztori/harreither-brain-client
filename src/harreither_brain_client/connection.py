@@ -321,7 +321,6 @@ class Connection:
 
     async def recv_ACK(self, msg: MessageReceived) -> None:
         ref = msg.ref
-        logger.debug("Received ACK for ref: %s", ref)
 
         # Call callback if registered
         callback = self.pending_ack_callbacks.pop(ref, None)
@@ -330,7 +329,7 @@ class Connection:
 
     async def recv_NACK(self, msg: MessageReceived) -> None:
         ref = msg.ref
-        logger.debug("Received NACK for ref: %s", ref)
+        logger.info("Received NACK for ref: %s", ref)
 
         # Call callback if registered
         callback = self.pending_ack_callbacks.pop(ref, None)
@@ -382,6 +381,7 @@ class Connection:
         ack_result = False
 
         async def ack_callback(is_ack: bool):
+            nonlocal ack_result
             ack_result = is_ack
             ack_event.set()
 

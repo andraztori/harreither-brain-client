@@ -80,7 +80,9 @@ class TraverseScreens:
                 actual_screen_ack = await self.conn_obj.enqueue_message_get_ack(
                     screen_msg
                 )
-
+                #logging.info(
+                #    f"Received ACK for ACTUAL_SCREEN {originating_screen_key},  succes: {actual_screen_ack}"
+                #)
                 # Create and enqueue the ACTION_SELECTED message
                 msg = entry.message_action_selected(self.conn_obj)
                 # POTENTIAL BUG : these actions can trigger additional entry_update_callback calls as the device responds.
@@ -89,7 +91,7 @@ class TraverseScreens:
                 logging.debug(f"Enqueued ACTION_SELECTED for {key}: {msg.payload}")
                 action_selected_ack = await self.conn_obj.enqueue_message_get_ack(msg)
                 logging.debug(
-                    f"Received ACK for ACTUAL_SCREEN {key}, succes: {action_selected_ack}"
+                    f"Received ACK for ACTION_SELECTED {key}, succes: {action_selected_ack}"
                 )
             except asyncio.CancelledError:
                 logging.info("Traverse_screens() processing CanceledError exception.")
