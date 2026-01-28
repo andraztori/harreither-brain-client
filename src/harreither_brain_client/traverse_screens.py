@@ -21,7 +21,7 @@ class TraverseScreens:
     All other "buttons" presumably lead to screens.
     """
 
-    def __init__(self, conn_obj: Connection):
+    def __init__(self, conn_obj: Connection) -> None:
         self.conn_obj = conn_obj
         self.explore_queue: asyncio.Queue = asyncio.Queue()
         self.requested_screens: set = set()
@@ -76,7 +76,7 @@ class TraverseScreens:
                     continue
 
                 # Create ACTUAL_SCREEN message to navigate to the originating screen
-                screen_msg = entry.message_activate_entering_screen(self.conn_obj)
+                screen_msg = entry.message_activate_entering_screen()
                 actual_screen_ack = await self.conn_obj.enqueue_message_get_ack(
                     screen_msg
                 )
@@ -84,7 +84,7 @@ class TraverseScreens:
                 #    f"Received ACK for ACTUAL_SCREEN {originating_screen_key},  succes: {actual_screen_ack}"
                 #)
                 # Create and enqueue the ACTION_SELECTED message
-                msg = entry.message_action_selected(self.conn_obj)
+                msg = entry.message_action_selected()
                 # POTENTIAL BUG : these actions can trigger additional entry_update_callback calls as the device responds.
                 # ASSESMENT: IT'S OK as this is run immediately after connection initialization, before
 

@@ -10,7 +10,7 @@ from .authenticate import Authenticate
 from .data import Data, Entry
 from .establish_connection import EstablishConnection
 from .type_int import TypeInt
-from .message import MessageReceived, MessageSend
+from .message import MessageReceived, MessageSend, MC_AUTO
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +260,9 @@ class Connection:
                 if queued_msg is not None:
                     # Extract MessageSend and register callback if present
                     msg_to_send = queued_msg.message
+                    # Auto-fill MC_AUTO with actual message counter
+                    if msg_to_send.mc == MC_AUTO:
+                        msg_to_send.mc = self.new_message_reference()
                     if queued_msg.async_ack_callback and msg_to_send.mc:
                         self.pending_ack_callbacks[msg_to_send.mc] = (
                             queued_msg.async_ack_callback
@@ -291,9 +294,14 @@ class Connection:
             await self.recv_ACK(msg)
         elif msg.type_int == TypeInt.NACK:
             await self.recv_NACK(msg)
+        elif msg.type_int == TypeInt.HEARTBEAT:
+            # Heartbeat messages are no-op, device is just keeping connection alive
+            logger.debug("Received HEARTBEAT")
         elif msg.type_int == TypeInt.WAIT4ACK:
             # Device sends WAIT4ACK if it cannot answer the request within 3 seconds
-            logger.debug("Received WAIT4ACK, device is processing request")
+            logger.debug(
+                "Received WAIT4ACK, device is processing the request for more than 3 seconds"
+            )
         elif msg.type_int == TypeInt.SET_HOME_DATA:
             await self.data.recv_SET_HOME_DATA(msg)
         elif msg.type_int == TypeInt.APP_INFO:
@@ -337,6 +345,10 @@ class Connection:
             await callback(False)
 
     async def send_message(self, msg: MessageSend) -> None:
+        # Auto-fill MC_AUTO with actual message counter
+        if msg.mc == MC_AUTO:
+            msg.mc = self.new_message_reference()
+        
         data = {
             "type_int": msg.type_int,
         }

@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Any, Tuple
 
-from .message import MessageSend
+from .message import MessageSend, MC_AUTO
 from .type_int import TypeInt
 
 logger = logging.getLogger(__name__)
@@ -33,12 +33,11 @@ class Entry(dict):
             return [Entry._normalize_value(v) for v in value]
         return value
 
-    def message_edit_value(self, value: int, connection: Any) -> MessageSend:
+    def message_edit_value(self, value: int) -> MessageSend:
         """Create a SELECT message to change the device value.
 
         Args:
             value: The index of the selected option (0-based).
-            connection: The connection object to get message reference from.
 
         Returns:
             A MessageSend object for the ACTION_EDITED_VALUE message.
@@ -58,15 +57,12 @@ class Entry(dict):
 
         return MessageSend(
             type_int=TypeInt.ACTION_EDITED_VALUE,
-            mc=connection.new_message_reference(),
+            mc=MC_AUTO,
             payload=payload,
         )
 
-    def message_activate_entering_screen(self, connection: Any) -> MessageSend:
+    def message_activate_entering_screen(self) -> MessageSend:
         """Create a message to activate the screen associated with this entry.
-
-        Args:
-            connection: The connection object to get message reference from.
 
         Returns:
             A MessageSend object for the ACTUAL_SCREEN message.
@@ -82,15 +78,13 @@ class Entry(dict):
 
         return MessageSend(
             type_int=TypeInt.ACTUAL_SCREEN,
-            mc=connection.new_message_reference(),
+            mc=MC_AUTO,
             payload=screen_payload,
         )
 
-    def message_action_selected(self, connection: Any) -> MessageSend:
+    def message_action_selected(self) -> MessageSend:
         """Create a message to trigger ACTION_SELECTED for this entry.
             You need to activate the screen before that for this to work properly!
-        Args:
-            connection: The connection object to get message reference from.
 
         Returns:
             A MessageSend object for the ACTION_SELECTED message.
@@ -105,7 +99,7 @@ class Entry(dict):
 
         return MessageSend(
             type_int=TypeInt.ACTION_SELECTED,
-            mc=connection.new_message_reference(),
+            mc=MC_AUTO,
             payload=payload,
         )
 

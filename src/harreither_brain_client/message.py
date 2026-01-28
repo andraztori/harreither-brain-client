@@ -1,3 +1,7 @@
+# Special value indicating that the message counter should be auto-filled
+MC_AUTO = -1000
+
+
 class MessageReceived:
     def __init__(self, type_int, mc, payload, ref=None) -> None:
         self.type_int = type_int
