@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from .connection import Connection
-from .data import Entry
+from .entries import Entry
 
 
 class TraverseScreens:
