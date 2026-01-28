@@ -38,9 +38,9 @@ class TraverseScreens:
         # Log entities with detail = 0 or detail = 1 to a separate file
         detail = key[1]
         _vid_obj = entry.get("_vid_obj", {})
-        if new and detail in (0, 1) and _vid_obj.get("type") == 1:
-            with open("detail_0_1_entities.txt", "a", encoding="utf-8") as f:
-                f.write(f"{update_type}: {key}: {entry}\n")
+        # if new and detail in (0, 1) and _vid_obj.get("type") == 1:
+        #    with open("detail_0_1_entities.txt", "a", encoding="utf-8") as f:
+        #        f.write(f"{update_type}: {key}: {entry}\n")
 
         # Check if this is a type 1 entry and add to explore queue (but exclude detail=1)
         if new and detail not in (0, 1):
@@ -80,9 +80,9 @@ class TraverseScreens:
                 actual_screen_ack = await self.conn_obj.enqueue_message_get_ack(
                     screen_msg
                 )
-                #logging.info(
+                # logging.info(
                 #    f"Received ACK for ACTUAL_SCREEN {originating_screen_key},  succes: {actual_screen_ack}"
-                #)
+                # )
                 # Create and enqueue the ACTION_SELECTED message
                 msg = entry.message_action_selected()
                 # POTENTIAL BUG : these actions can trigger additional entry_update_callback calls as the device responds.
