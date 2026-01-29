@@ -2,7 +2,7 @@
 
 from .authenticate import Authenticate, generate_key, hash_device
 from .connection import Connection
-from .data import Data
+from .receive import ReceiveData
 from .establish_connection import EstablishConnection
 from .message import MessageReceived, MessageSend
 from .type_int import TypeInt
@@ -10,7 +10,7 @@ from .type_int import TypeInt
 __all__ = [
     "Authenticate",
     "Connection",
-    "Data",
+    "ReceiveData",
     "EstablishConnection",
     "MessageReceived",
     "MessageSend",

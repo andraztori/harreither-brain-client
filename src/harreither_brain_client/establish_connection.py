@@ -96,6 +96,8 @@ class EstablishConnection:  # noqa: D101
         logger.debug(f"Public key [15]: {public_key}")
         logger.debug(f"Device signature [15]: {device_signature}")
 
+        # in theory we would now check the device signature, but why...
+
         self.public_key = serialization.load_pem_public_key(
             public_key.encode("utf-8"), backend=default_backend()
         )

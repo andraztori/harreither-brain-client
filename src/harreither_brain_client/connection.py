@@ -7,7 +7,7 @@ from contextlib import suppress
 import websockets
 
 from .authenticate import Authenticate
-from .data import Data
+from .receive import ReceiveData
 from .entries import Entry, Entries
 from .establish_connection import EstablishConnection
 from .type_int import TypeInt
@@ -56,7 +56,7 @@ class Connection:
         self.event_initial_setup_complete = asyncio.Event()
         self.event_initial_traverse_screens_complete = asyncio.Event()
         self.entries = Entries(self)
-        self.data = Data(self)
+        self.data = ReceiveData(self)
         self.establish_connection_obj = EstablishConnection(self)
         self.authentication_obj = Authenticate(self)
         self.message_queue = asyncio.Queue()
